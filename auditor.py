@@ -41,6 +41,7 @@ OPENAI_ENDPOINT = "https://api.openai.com/v1/chat/completions"
 DEFAULT_LOCATION_CODE = 2840  # United States
 DEFAULT_LANGUAGE_CODE = "en"
 REQUEST_TIMEOUT = 15
+SERP_REQUEST_TIMEOUT = 60  # Live Advanced SERP tasks routinely take longer than a generic HTTP call.
 
 SEARCHBOT_USER_AGENT = "Mozilla/5.0 (compatible; OAI-SearchBot/1.0; +https://openai.com/searchbot)"
 
@@ -164,22 +165,32 @@ class DataForSEORetrievalAuditor:
     def has_credentials(self) -> bool:
         return bool(self.login and self.password)
 
+    # Lead-in phrases that would double up if prepended to a query already
+    # phrased as a question (e.g. "what is X" -> "what is what is X").
+    _REDUNDANT_LEADINS = ("what is", "what are", "how does", "how do", "why is", "why are", "best", "top")
+
     def generate_fanout_queries(self, primary_query: str, limit: int = 4) -> list[str]:
         """Expands the primary query into the sub-queries a RAG system's
         query planner would typically fan out to."""
         base = primary_query.strip().rstrip("?")
-        templates = [
-            f"what is {base}",
-            f"how does {base} work",
-            f"{base} benefits",
-            f"best {base}",
-            f"{base} vs alternatives",
-        ]
+        base_lower = base.lower()
+        already_has_leadin = base_lower.startswith(self._REDUNDANT_LEADINS)
+
+        candidates: list[str] = []
+        if not already_has_leadin:
+            candidates.append(f"what is {base}")
+            candidates.append(f"how does {base} work")
+            candidates.append(f"best {base}")
+        # Suffix templates never collide with an existing lead-in, so they
+        # always apply.
+        candidates.append(f"{base} benefits")
+        candidates.append(f"{base} vs alternatives")
+
         seen: set[str] = set()
         fanout: list[str] = []
-        for candidate in templates:
+        for candidate in candidates:
             normalized = candidate.strip().lower()
-            if normalized == base.lower() or normalized in seen:
+            if normalized == base_lower or normalized in seen:
                 continue
             seen.add(normalized)
             fanout.append(candidate)
@@ -211,7 +222,7 @@ class DataForSEORetrievalAuditor:
                 DATAFORSEO_ENDPOINT,
                 auth=(self.login, self.password),
                 json=payload,
-                timeout=REQUEST_TIMEOUT,
+                timeout=SERP_REQUEST_TIMEOUT,
             )
             response.raise_for_status()
             data = response.json()
@@ -233,7 +244,7 @@ class DataForSEORetrievalAuditor:
             return None, f"DataForSEO response shape unexpected: {exc}"
 
         for item in items:
-            item_domain = (item.get("domain") or "").lower().lstrip("www.")
+            item_domain = re.sub(r"^www\.", "", (item.get("domain") or "").lower())
             item_url = (item.get("url") or "").lower()
             if target_domain in item_domain or target_domain in item_url:
                 rank = item.get("rank_absolute") or item.get("rank_group")
