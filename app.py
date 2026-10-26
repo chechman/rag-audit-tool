@@ -93,7 +93,10 @@ def render_passage_tabs(report: AuditReport) -> None:
         st.error(report.passage.fetch_error, icon="🚫")
         return
     if report.passage.simulated:
-        st.info("Scoring heuristic-only (no OpenAI key supplied) — composite still enforces the K2 gate.", icon="⚠️")
+        if report.passage.llm_error:
+            st.warning(f"OpenAI key was rejected, scoring heuristic-only: {report.passage.llm_error}", icon="⚠️")
+        else:
+            st.info("Scoring heuristic-only (no OpenAI key supplied) — composite still enforces the K2 gate.", icon="⚠️")
     if not report.passage.scores:
         st.warning("No passages were available to score.")
         return

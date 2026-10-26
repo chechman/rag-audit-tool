@@ -117,6 +117,7 @@ class PassageAudit(BaseModel):
     passed: bool = False
     simulated: bool = False
     fetch_error: Optional[str] = None
+    llm_error: Optional[str] = None
 
 
 class AuditReport(BaseModel):
@@ -378,6 +379,7 @@ class PassageScorer:
     def __init__(self, openai_api_key: str = "", k2_threshold: float = 0.6):
         self.openai_api_key = (openai_api_key or "").strip()
         self.k2_threshold = k2_threshold
+        self.last_llm_error: Optional[str] = None
 
     @property
     def has_credentials(self) -> bool:
@@ -467,7 +469,21 @@ class PassageScorer:
                 },
                 timeout=REQUEST_TIMEOUT,
             )
-            response.raise_for_status()
+        except requests.exceptions.RequestException as exc:
+            self.last_llm_error = f"OpenAI request failed: {exc}"
+            return heuristic, False
+
+        if response.status_code != 200:
+            # OpenAI error bodies never echo the API key back, so this is
+            # safe to surface verbatim in diagnostics.
+            try:
+                detail = response.json().get("error", {}).get("message", response.text[:200])
+            except ValueError:
+                detail = response.text[:200]
+            self.last_llm_error = f"OpenAI API error ({response.status_code}): {detail}"
+            return heuristic, False
+
+        try:
             content = response.json()["choices"][0]["message"]["content"]
             parsed = json.loads(content)
             scores = {
@@ -475,7 +491,8 @@ class PassageScorer:
                 for key in ("conclusion_first", "entity_self_contained", "factual_density")
             }
             return scores, True
-        except (requests.exceptions.RequestException, KeyError, ValueError, TypeError, json.JSONDecodeError):
+        except (KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            self.last_llm_error = f"OpenAI response parsing failed: {exc}"
             return heuristic, False
 
     def score_chunk(self, chunk: PassageChunk) -> PassageScore:
@@ -545,7 +562,8 @@ class HybridAuditEngine:
             scores=scores,
             best_score=best_score,
             passed=any(s.passed for s in scores),
-            simulated=not self.scorer.has_credentials,
+            simulated=not any(s.scoring_method == "llm" for s in scores),
+            llm_error=self.scorer.last_llm_error,
         )
 
     @staticmethod
@@ -582,7 +600,12 @@ class HybridAuditEngine:
                 f"(best score: {best}, {passage.chunks_evaluated} chunks evaluated)."
             )
         if passage.simulated and not passage.fetch_error:
-            diagnostics.append("K2 ran in heuristic-only mode — no OpenAI key was supplied.")
+            if passage.llm_error:
+                diagnostics.append(
+                    f"K2 fell back to heuristic-only mode — the OpenAI key was supplied but rejected: {passage.llm_error}"
+                )
+            else:
+                diagnostics.append("K2 ran in heuristic-only mode — no OpenAI key was supplied.")
 
         return diagnostics
 
