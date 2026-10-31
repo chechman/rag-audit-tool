@@ -1,6 +1,7 @@
 .venv/
 __pycache__/
 *.pyc
-.streamlit/
+.streamlit/*
+!.streamlit/config.toml
 .env
 .env.local

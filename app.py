@@ -11,14 +11,23 @@ from auditor import AuditReport, HybridAuditEngine
 
 st.set_page_config(page_title="RAG Retrieval Auditor", page_icon="🔎", layout="wide")
 
+_POSITIVE = "#4cc38a"
+_NEGATIVE = "#e5484d"
+
 
 def _badge(passed: bool, label: str) -> str:
-    color = "#1a7f37" if passed else "#cf222e"
+    color = _POSITIVE if passed else _NEGATIVE
     text = f"PASS · {label}" if passed else f"FAIL · {label}"
     return (
-        f'<span style="background-color:{color};color:white;padding:4px 10px;'
-        f'border-radius:12px;font-size:0.85rem;font-weight:600;">{text}</span>'
+        f'<span style="background-color:{color}1f;color:{color};padding:4px 12px;'
+        f'border:1px solid {color}4d;border-radius:6px;font-size:0.8rem;'
+        f'font-weight:500;">{text}</span>'
     )
+
+
+def _status_mark(ok: bool) -> str:
+    color = _POSITIVE if ok else "#7a8296"
+    return f'<span style="color:{color};font-weight:600;">&#9632;</span>'
 
 
 def render_sidebar() -> dict:
@@ -76,32 +85,35 @@ def render_metrics(report: AuditReport) -> None:
 def render_retrieval_detail(report: AuditReport) -> None:
     st.subheader("K1 — Retrieval Detail")
     if report.retrieval.simulated:
-        st.info("Running in simulated mode (no DataForSEO credentials supplied).", icon="⚠️")
+        st.info("Running in simulated mode (no DataForSEO credentials supplied).")
     if report.retrieval.error:
-        st.warning(report.retrieval.error, icon="⚠️")
+        st.warning(report.retrieval.error)
 
     for entry in report.retrieval.sub_queries:
         rank_text = f"Rank #{entry.rank}" if entry.found else "Not in results"
         label = "Primary query" if entry.is_primary else "Fan-out sub-query"
-        icon = "✅" if entry.found and entry.rank and entry.rank <= report.retrieval.k1_cutoff else "⬜"
-        st.write(f"{icon} **[{label}]** `{entry.query}` → {rank_text}")
+        ok = bool(entry.found and entry.rank and entry.rank <= report.retrieval.k1_cutoff)
+        st.markdown(
+            f"{_status_mark(ok)} **[{label}]** `{entry.query}` → {rank_text}",
+            unsafe_allow_html=True,
+        )
 
 
 def render_passage_tabs(report: AuditReport) -> None:
     st.subheader("K2 — Passage Inspection")
     if report.passage.fetch_error:
-        st.error(report.passage.fetch_error, icon="🚫")
+        st.error(report.passage.fetch_error)
         return
     if report.passage.simulated:
         if report.passage.llm_error:
-            st.warning(f"OpenAI key was rejected, scoring heuristic-only: {report.passage.llm_error}", icon="⚠️")
+            st.warning(f"OpenAI key was rejected, scoring heuristic-only: {report.passage.llm_error}")
         else:
-            st.info("Scoring heuristic-only (no OpenAI key supplied) — composite still enforces the K2 gate.", icon="⚠️")
+            st.info("Scoring heuristic-only (no OpenAI key supplied) — composite still enforces the K2 gate.")
     if not report.passage.scores:
         st.warning("No passages were available to score.")
         return
 
-    tab_labels = [f"{'✅' if s.passed else '❌'} {s.chunk.heading[:40]}" for s in report.passage.scores]
+    tab_labels = [f"{'PASS' if s.passed else 'FAIL'} · {s.chunk.heading[:40]}" for s in report.passage.scores]
     tabs = st.tabs(tab_labels)
     for tab, score in zip(tabs, report.passage.scores):
         with tab:
@@ -126,7 +138,7 @@ def render_diagnostics(report: AuditReport) -> None:
 
 
 def main() -> None:
-    st.title("🔎 RAG Retrieval & Re-Ranking Audit Tool")
+    st.title("RAG Retrieval & Re-Ranking Audit Tool")
     st.caption(
         "Two-stage audit framework: K1 checks whether a page is *retrieved* "
         "within the top-N SERP cutoff; K2 checks whether any passage on that "
